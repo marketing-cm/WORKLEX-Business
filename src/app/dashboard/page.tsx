@@ -604,7 +604,7 @@ export default function DashboardPage() {
                                   <span
                                     className={`absolute top-1 h-5 w-5 rounded-full bg-white shadow transition-transform duration-200 ${
                                       isOpen || paid > 0
-                                        ? 'translate-x-6'
+                                        ? 'translate-x-5'
                                         : 'translate-x-1'
                                     }`}
                                   />
@@ -667,7 +667,7 @@ export default function DashboardPage() {
                                           : 'bg-white text-gray-600 border-gray-200 hover:border-[#b69b6b]'
                                       }`}
                                     >
-                                      Rest vollständig bezahlen
+                                      Rest vollständig bezahlt
                                     </button>
                                   </div>
 

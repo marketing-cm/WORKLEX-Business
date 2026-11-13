@@ -1,7 +1,7 @@
 
 'use client'
 
-import { useEffect, useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 
@@ -135,6 +135,10 @@ export default function RevenuesPage() {
     setPaymentValue('')
     setInputMode('euro')
     setPaymentError('')
+  }
+
+  const openRevenue = (revenueId: string) => {
+    router.push(`/dashboard/revenues/${revenueId}`)
   }
 
   const savePayment = async (item: Revenue) => {
@@ -338,19 +342,36 @@ export default function RevenuesPage() {
                     )
 
                     return (
-                      <>
-                        <tr key={item.id} className="transition hover:bg-[#faf9f6]">
+                      <Fragment key={item.id}>
+                        <tr
+                          onClick={() => openRevenue(item.id)}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter' || event.key === ' ') {
+                              event.preventDefault()
+                              openRevenue(item.id)
+                            }
+                          }}
+                          role="link"
+                          tabIndex={0}
+                          className="cursor-pointer transition hover:bg-[#faf9f6] focus:outline-none focus:bg-[#f5f3ee]"
+                          title="Einnahmedetails öffnen"
+                        >
                           <td className="whitespace-nowrap px-6 py-5 text-[#77736c]">
                             {dateFormat(item.invoice_date)}
                           </td>
 
                           <td className="px-6 py-5">
-                            <p className="font-medium">{item.title}</p>
+                            <p className="font-medium text-[#292929]">
+                              {item.title}
+                            </p>
                             {item.category && (
                               <p className="mt-1 text-xs text-[#a18b65]">
                                 {item.category}
                               </p>
                             )}
+                            <p className="mt-1 text-xs text-[#a18b65]">
+                              Details öffnen ↗
+                            </p>
                           </td>
 
                           <td className="px-6 py-5 text-[#77736c]">
@@ -391,7 +412,10 @@ export default function RevenuesPage() {
                             <div className="flex items-center justify-end gap-3">
                               <button
                                 type="button"
-                                onClick={() => openPayment(item.id)}
+                                onClick={(event) => {
+                                  event.stopPropagation()
+                                  openPayment(item.id)
+                                }}
                                 className={`relative h-7 w-12 rounded-full transition ${
                                   isPaid
                                     ? 'bg-emerald-600'
@@ -408,21 +432,12 @@ export default function RevenuesPage() {
                                   }`}
                                 />
                               </button>
-
-                              <button
-                                onClick={() =>
-                                  router.push(`/dashboard/revenues/new?id=${item.id}`)
-                                }
-                                className="rounded-lg border border-[#d8c9aa] px-3 py-2 text-xs font-medium text-[#8b744d] transition hover:bg-[#f5f3ee]"
-                              >
-                                Bearbeiten
-                              </button>
                             </div>
                           </td>
                         </tr>
 
                         {isOpen && (
-                          <tr key={`${item.id}-payment`}>
+                          <tr>
                             <td colSpan={8} className="bg-[#faf9f6] px-6 py-6">
                               <div className="grid gap-6 lg:grid-cols-2">
                                 <div>
@@ -650,7 +665,7 @@ export default function RevenuesPage() {
                             </td>
                           </tr>
                         )}
-                      </>
+                      </Fragment>
                     )
                   })}
                 </tbody>

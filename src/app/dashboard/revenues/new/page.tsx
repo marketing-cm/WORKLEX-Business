@@ -1,8 +1,15 @@
+
 'use client'
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
+
+type InvoiceType =
+  | 'domestic_vat'
+  | 'intra_community_supply'
+  | 'reverse_charge'
+  | 'other_tax_exempt'
 
 export default function NewRevenuePage() {
   const router = useRouter()
@@ -15,6 +22,9 @@ export default function NewRevenuePage() {
   const [amount, setAmount] = useState('')
   const [mode, setMode] = useState('gross')
   const [vatRate, setVatRate] = useState('20')
+  const [invoiceType, setInvoiceType] = useState<InvoiceType>('domestic_vat')
+  const [skontoEnabled, setSkontoEnabled] = useState(false)
+  const [skontoPercent, setSkontoPercent] = useState('2')
   const [notes, setNotes] = useState('')
   const [receipt, setReceipt] = useState<File | null>(null)
   const [existingReceipt, setExistingReceipt] = useState('')
@@ -50,6 +60,9 @@ export default function NewRevenuePage() {
       setCategory(data.category || 'Sonstiges')
       setDate(data.invoice_date || '')
       setVatRate(String(data.vat_rate ?? 20))
+      setInvoiceType(data.invoice_type || 'domestic_vat')
+      setSkontoEnabled(Boolean(data.skonto_enabled))
+      setSkontoPercent(String(data.skonto_percent ?? 0))
       setAmount(String(data.gross_amount ?? ''))
       setMode('gross')
       setNotes(data.notes || '')
@@ -63,15 +76,24 @@ export default function NewRevenuePage() {
   const numericAmount = Number(amount) || 0
   const rate = Number(vatRate) || 0
 
-  const gross = mode === 'gross'
-    ? numericAmount
-    : numericAmount * (1 + rate / 100)
+  const effectiveRate =
+    invoiceType === 'domestic_vat' ? rate : 0
 
-  const net = mode === 'gross'
-    ? numericAmount / (1 + rate / 100)
-    : numericAmount
+  const gross =
+    mode === 'gross'
+      ? numericAmount
+      : numericAmount * (1 + effectiveRate / 100)
+
+  const net =
+    mode === 'gross'
+      ? numericAmount / (1 + effectiveRate / 100)
+      : numericAmount
 
   const vat = gross - net
+
+  const skontoBasis = invoiceType === 'domestic_vat' ? 'gross' : 'net'
+
+  const skontoValue = Number(skontoPercent.replace(',', '.')) || 0
 
   const euro = (value: number) =>
     value.toLocaleString('de-AT', {
@@ -83,6 +105,12 @@ export default function NewRevenuePage() {
     e.preventDefault()
     setLoading(true)
     setMessage('')
+
+    if (skontoEnabled && (skontoValue <= 0 || skontoValue > 100)) {
+      setMessage('Bitte gib einen gültigen Skontosatz zwischen 0 und 100 % ein.')
+      setLoading(false)
+      return
+    }
 
     const { data: { user } } = await supabase.auth.getUser()
 
@@ -111,9 +139,13 @@ export default function NewRevenuePage() {
       category,
       invoice_date: date,
       net_amount: Number(net.toFixed(2)),
-      vat_rate: rate,
+      vat_rate: effectiveRate,
       vat_amount: Number(vat.toFixed(2)),
       gross_amount: Number(gross.toFixed(2)),
+      invoice_type: invoiceType,
+      skonto_enabled: skontoEnabled,
+      skonto_percent: skontoEnabled ? skontoValue : 0,
+      skonto_basis: skontoBasis,
       notes: notes || null,
       updated_by: user.id,
     }
@@ -303,11 +335,59 @@ export default function NewRevenuePage() {
 
           <section className="bg-white rounded-2xl border border-[#e8e3d9] p-6 sm:p-8 space-y-5">
             <div>
-              <h2 className="text-lg font-medium">Betrag und Umsatzsteuer</h2>
+              <h2 className="text-lg font-medium">Rechnungsart und Umsatzsteuer</h2>
               <p className="text-xs text-gray-400 mt-1">
-                Die Beträge werden automatisch berechnet.
+                Die ausgewählte Steuerart bestimmt die Umsatzsteuer- und Skontoberechnung.
               </p>
             </div>
+
+            <div>
+              <label className={labelClass}>Rechnungsart *</label>
+              <select
+                value={invoiceType}
+                onChange={e => setInvoiceType(e.target.value as InvoiceType)}
+                className={inputClass}
+              >
+                <option value="domestic_vat">
+                  Inland – normale Rechnung mit Umsatzsteuer
+                </option>
+                <option value="intra_community_supply">
+                  EU-Ausland – innergemeinschaftliche Lieferung
+                </option>
+                <option value="reverse_charge">
+                  EU-Ausland – Reverse Charge
+                </option>
+                <option value="other_tax_exempt">
+                  Sonstige steuerfreie Rechnung
+                </option>
+              </select>
+            </div>
+
+            {invoiceType === 'domestic_vat' ? (
+              <div>
+                <label className={labelClass}>Umsatzsteuersatz</label>
+                <select
+                  value={vatRate}
+                  onChange={e => setVatRate(e.target.value)}
+                  className={inputClass}
+                >
+                  <option value="20">20 %</option>
+                  <option value="13">13 %</option>
+                  <option value="10">10 %</option>
+                  <option value="0">0 %</option>
+                </select>
+              </div>
+            ) : (
+              <div className="rounded-xl border border-[#e8e3d9] bg-[#f8f6f1] p-4">
+                <p className="text-sm font-medium text-[#755d36]">
+                  Keine österreichische Umsatzsteuer wird berechnet.
+                </p>
+                <p className="mt-1 text-xs leading-relaxed text-gray-500">
+                  Die Beträge werden ohne Umsatzsteuer erfasst. Bitte wähle diese
+                  Rechnungsart nur, wenn die steuerlichen Voraussetzungen erfüllt sind.
+                </p>
+              </div>
+            )}
 
             <div className="grid sm:grid-cols-2 gap-5">
               <div>
@@ -323,34 +403,20 @@ export default function NewRevenuePage() {
               </div>
 
               <div>
-                <label className={labelClass}>Umsatzsteuersatz</label>
-                <select
-                  value={vatRate}
-                  onChange={e => setVatRate(e.target.value)}
+                <label className={labelClass}>
+                  Betrag ({mode === 'gross' ? 'Brutto' : 'Netto'} in €) *
+                </label>
+                <input
+                  required
+                  min="0.01"
+                  step="0.01"
+                  type="number"
+                  value={amount}
+                  onChange={e => setAmount(e.target.value)}
                   className={inputClass}
-                >
-                  <option value="20">20 %</option>
-                  <option value="13">13 %</option>
-                  <option value="10">10 %</option>
-                  <option value="0">0 %</option>
-                </select>
+                  placeholder="0,00"
+                />
               </div>
-            </div>
-
-            <div>
-              <label className={labelClass}>
-                Betrag ({mode === 'gross' ? 'Brutto' : 'Netto'} in €) *
-              </label>
-              <input
-                required
-                min="0.01"
-                step="0.01"
-                type="number"
-                value={amount}
-                onChange={e => setAmount(e.target.value)}
-                className={`${inputClass} text-lg`}
-                placeholder="0,00"
-              />
             </div>
 
             <div className="bg-[#f8f6f1] border border-[#e8e3d9] rounded-xl p-5 space-y-3">
@@ -373,6 +439,97 @@ export default function NewRevenuePage() {
                 <strong className="text-lg text-[#8b744d]">{euro(gross)}</strong>
               </div>
             </div>
+          </section>
+
+          <section className="bg-white rounded-2xl border border-[#e8e3d9] p-6 sm:p-8 space-y-5">
+            <div>
+              <h2 className="text-lg font-medium">Skonto</h2>
+              <p className="text-xs text-gray-400 mt-1">
+                Hinterlege den Skontosatz für diese Rechnung.
+              </p>
+            </div>
+
+            <div className="flex items-center justify-between gap-4 rounded-xl border border-[#e8e3d9] p-4">
+              <div>
+                <p className="text-sm font-medium">Skonto ermöglichen</p>
+                <p className="mt-1 text-xs text-gray-500">
+                  Kann bei der Zahlung angewendet werden.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                role="switch"
+                aria-checked={skontoEnabled}
+                onClick={() => setSkontoEnabled(!skontoEnabled)}
+                className={`relative h-7 w-12 shrink-0 rounded-full transition ${
+                  skontoEnabled ? 'bg-emerald-600' : 'bg-[#d8d4cc]'
+                }`}
+              >
+                <span
+                  className={`absolute top-1 h-5 w-5 rounded-full bg-white shadow transition-all ${
+                    skontoEnabled ? 'left-6' : 'left-1'
+                  }`}
+                />
+              </button>
+            </div>
+
+            {skontoEnabled && (
+              <div className="space-y-4 rounded-xl border border-[#e8e3d9] bg-[#faf9f6] p-5">
+                <div>
+                  <label className={labelClass}>Skontosatz in Prozent</label>
+                  <div className="relative">
+                    <input
+                      type="number"
+                      min="0.01"
+                      max="100"
+                      step="0.01"
+                      value={skontoPercent}
+                      onChange={e => setSkontoPercent(e.target.value)}
+                      className={inputClass}
+                      placeholder="z. B. 2"
+                    />
+                    <span className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400">
+                      %
+                    </span>
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-[#e8e3d9] bg-white p-4">
+                  <p className="text-xs uppercase tracking-wider text-[#a18b65]">
+                    Berechnungsgrundlage
+                  </p>
+                  <p className="mt-2 font-semibold">
+                    {skontoBasis === 'gross' ? 'Bruttobetrag' : 'Nettobetrag'}
+                  </p>
+                  <p className="mt-1 text-xs text-gray-500">
+                    {skontoBasis === 'gross'
+                      ? 'Bei einer normalen Rechnung mit Umsatzsteuerausweis wird das Skonto vom Brutto berechnet.'
+                      : 'Bei dieser Rechnungsart wird das Skonto vom Netto berechnet.'}
+                  </p>
+                </div>
+
+                {skontoValue > 0 && skontoValue <= 100 && (
+                  <div className="flex items-center justify-between gap-3 border-t border-[#e8e3d9] pt-4">
+                    <span className="text-sm text-gray-500">
+                      Skonto bei vollständiger Zahlung
+                    </span>
+                    <strong className="text-lg text-emerald-700">
+                      {euro(
+                        (skontoBasis === 'gross' ? gross : net) *
+                        skontoValue / 100
+                      )}
+                    </strong>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {!skontoEnabled && (
+              <p className="text-xs text-gray-400">
+                Für diese Rechnung wird kein Skonto angeboten.
+              </p>
+            )}
           </section>
 
           <section className="bg-white rounded-2xl border border-[#e8e3d9] p-6 sm:p-8 space-y-5">
