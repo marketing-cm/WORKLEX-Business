@@ -42,6 +42,7 @@ export default function DashboardPage() {
   const router = useRouter()
 
   const [companyName, setCompanyName] = useState('Mein Unternehmen')
+  const [firstName, setFirstName] = useState('')
   const [companyLogoUrl, setCompanyLogoUrl] = useState('')
   const [revenues, setRevenues] = useState<Booking[]>([])
   const [costs, setCosts] = useState<Booking[]>([])
@@ -73,7 +74,7 @@ export default function DashboardPage() {
 
       const { data: profile, error: profileError } = await supabase
         .from('profiles')
-        .select('company_id, must_change_password')
+        .select('company_id, must_change_password, first_name')
         .eq('user_id', user.id)
         .single()
 
@@ -82,6 +83,8 @@ export default function DashboardPage() {
         setLoading(false)
         return
       }
+
+      setFirstName(profile.first_name || '')
 
       if (profile.must_change_password) {
         router.replace('/change-password')
@@ -370,10 +373,18 @@ export default function DashboardPage() {
       <div className="max-w-7xl mx-auto px-5 py-10">
         <div className="mb-9">
           <p className="text-xs tracking-[0.25em] text-[#a18b65] uppercase mb-2">
-            Willkommen in deinem Unternehmensportal
+            {new Date().getHours() < 12
+              ? 'Guten Morgen'
+              : new Date().getHours() < 18
+                ? 'Guten Tag'
+                : 'Guten Abend'}
           </p>
 
-          <div className="flex items-center gap-4">
+          <h1 className="text-3xl sm:text-4xl font-light">
+            Herzlich willkommen{firstName ? `, ${firstName}` : ''}!
+          </h1>
+
+          <div className="flex items-center gap-4 mt-4">
             {companyLogoUrl && (
               <img
                 src={companyLogoUrl}
@@ -382,14 +393,13 @@ export default function DashboardPage() {
               />
             )}
 
-            <h1 className="text-3xl sm:text-4xl font-light">
-              {companyName}
-            </h1>
+            <div>
+              <p className="text-lg font-medium">{companyName}</p>
+              <p className="text-sm text-gray-500 mt-1">
+                Deine finanzielle Übersicht auf einen Blick.
+              </p>
+            </div>
           </div>
-
-          <p className="text-sm text-gray-500 mt-2">
-            Deine finanzielle Übersicht auf einen Blick.
-          </p>
         </div>
 
         {error && (
