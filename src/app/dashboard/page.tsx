@@ -1,6 +1,6 @@
 'use client'
 
-import { Fragment, useEffect, useMemo, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 
@@ -38,12 +38,38 @@ const dateFormat = (value: string) =>
 const roundMoney = (value: number) =>
   Math.round((value + Number.EPSILON) * 100) / 100
 
+type WeatherSnapshot = {
+  temperature: number
+  apparentTemperature: number
+  description: string
+  icon: string
+  isDay: boolean
+  city: string
+  mapUrl: string
+}
+
+function describeWeather(code: number, isDay: boolean) {
+  if (code === 0) return { description: 'Klarer Himmel', icon: isDay ? '☀️' : '🌙' }
+  if (code === 1) return { description: 'Überwiegend klar', icon: isDay ? '🌤️' : '🌙' }
+  if (code === 2) return { description: 'Teilweise bewölkt', icon: '⛅' }
+  if (code === 3) return { description: 'Bedeckt', icon: '☁️' }
+  if ([45, 48].includes(code)) return { description: 'Nebelig', icon: '🌫️' }
+  if ([51, 53, 55, 56, 57].includes(code)) return { description: 'Nieselregen', icon: '🌦️' }
+  if ([61, 63, 65, 66, 67, 80, 81, 82].includes(code)) return { description: 'Regen', icon: '🌧️' }
+  if ([71, 73, 75, 77, 85, 86].includes(code)) return { description: 'Schnee', icon: '❄️' }
+  if ([95, 96, 99].includes(code)) return { description: 'Gewitter', icon: '⛈️' }
+  return { description: 'Wetter aktuell', icon: '🌤️' }
+}
+
 export default function DashboardPage() {
   const router = useRouter()
 
   const [companyName, setCompanyName] = useState('Mein Unternehmen')
   const [firstName, setFirstName] = useState('')
   const [companyLogoUrl, setCompanyLogoUrl] = useState('')
+  const [weather, setWeather] = useState<WeatherSnapshot | null>(null)
+  const [weatherLoading, setWeatherLoading] = useState(false)
+  const [weatherError, setWeatherError] = useState('')
   const [revenues, setRevenues] = useState<Booking[]>([])
   const [costs, setCosts] = useState<Booking[]>([])
   const [payments, setPayments] = useState<RevenuePayment[]>([])
@@ -56,6 +82,84 @@ export default function DashboardPage() {
   const [paymentUnit, setPaymentUnit] = useState<'euro' | 'percent'>('euro')
   const [paymentInput, setPaymentInput] = useState('')
   const [savingPaymentId, setSavingPaymentId] = useState<string | null>(null)
+
+  const loadCompanyWeather = useCallback(async (postalCode: string, city: string, country: string) => {
+    if (!city.trim() || !country.trim()) return
+
+    setWeatherLoading(true)
+    setWeatherError('')
+
+    try {
+      const geocodingUrl = new URL('https://geocoding-api.open-meteo.com/v1/search')
+      geocodingUrl.search = new URLSearchParams({
+        name: city.trim(),
+        count: '10',
+        language: 'de',
+        format: 'json',
+      }).toString()
+
+      const geocodingResponse = await fetch(geocodingUrl.toString())
+      if (!geocodingResponse.ok) throw new Error('Standort konnte nicht gefunden werden.')
+
+      const geocodingData = await geocodingResponse.json()
+      const results = geocodingData.results || []
+      const normalizedCountry = country.trim().toLocaleLowerCase('de-AT')
+      const countryAliases: Record<string, string[]> = {
+        'österreich': ['austria'],
+        'schweiz': ['switzerland'],
+        'deutschland': ['germany'],
+      }
+      const acceptedCountryNames = [
+        normalizedCountry,
+        ...(countryAliases[normalizedCountry] || []),
+      ]
+      const location =
+        results.find((result: { country?: string }) =>
+          acceptedCountryNames.includes((result.country || '').toLocaleLowerCase('de-AT'))
+        ) || results[0]
+
+      if (!location) throw new Error('Für diese Firmenadresse wurde kein Wetterstandort gefunden.')
+
+      const forecastUrl = new URL('https://api.open-meteo.com/v1/forecast')
+      forecastUrl.search = new URLSearchParams({
+        latitude: String(location.latitude),
+        longitude: String(location.longitude),
+        current: 'temperature_2m,apparent_temperature,is_day,weather_code',
+        timezone: 'auto',
+      }).toString()
+
+      const forecastResponse = await fetch(forecastUrl.toString())
+      if (!forecastResponse.ok) throw new Error('Wetterdaten sind momentan nicht erreichbar.')
+
+      const forecastData = await forecastResponse.json()
+      const current = forecastData.current
+      if (!current) throw new Error('Aktuelle Wetterdaten sind momentan nicht verfügbar.')
+
+      const isDay = Number(current.is_day) === 1
+      const condition = describeWeather(Number(current.weather_code), isDay)
+      const latitude = Number(location.latitude)
+      const longitude = Number(location.longitude)
+
+      setWeather({
+        temperature: Number(current.temperature_2m),
+        apparentTemperature: Number(current.apparent_temperature),
+        description: condition.description,
+        icon: condition.icon,
+        isDay,
+        city: location.name || city,
+        mapUrl: `https://staticmap.openstreetmap.de/staticmap.php?center=${latitude},${longitude}&zoom=11&size=640x240&markers=${latitude},${longitude},red-pushpin`,
+      })
+    } catch (weatherLoadError) {
+      console.error('Wetter konnte nicht geladen werden:', weatherLoadError)
+      setWeatherError(
+        weatherLoadError instanceof Error
+          ? weatherLoadError.message
+          : 'Wetterdaten konnten nicht geladen werden.'
+      )
+    } finally {
+      setWeatherLoading(false)
+    }
+  }, [])
 
   useEffect(() => {
     async function loadDashboard() {
@@ -101,7 +205,7 @@ export default function DashboardPage() {
       ] = await Promise.all([
         supabase
           .from('companies')
-          .select('name, logo_path, setup_completed')
+          .select('name, logo_path, setup_completed, postal_code, city, country')
           .eq('id', companyId)
           .single(),
 
@@ -133,6 +237,12 @@ export default function DashboardPage() {
         router.replace('/dashboard/setup')
         return
       }
+
+      void loadCompanyWeather(
+        companyResult.data.postal_code || '',
+        companyResult.data.city || '',
+        companyResult.data.country || ''
+      )
 
       if (companyResult.data.name) {
         setCompanyName(companyResult.data.name)
@@ -168,7 +278,7 @@ export default function DashboardPage() {
     }
 
     loadDashboard()
-  }, [router])
+  }, [router, loadCompanyWeather])
 
   async function handleLogout() {
     await supabase.auth.signOut()
@@ -401,6 +511,60 @@ export default function DashboardPage() {
             </div>
           </div>
         </div>
+
+        {/* Firmenstandort und aktuelles Wetter */}
+        <section className="mb-8 overflow-hidden rounded-2xl border border-[#e8e3d9] bg-[#242424] text-white shadow-sm">
+          <div className="grid grid-cols-1 md:grid-cols-[1.1fr_1fr]">
+            <div className="flex flex-col justify-center p-6 sm:p-7">
+              <p className="text-xs uppercase tracking-[0.22em] text-[#d6bd91]">
+                Wetter am Unternehmensstandort
+              </p>
+
+              {weatherLoading ? (
+                <p className="mt-4 text-sm text-white/65">Wetterdaten werden geladen ...</p>
+              ) : weather ? (
+                <>
+                  <div className="mt-3 flex items-center gap-4">
+                    <span className="text-5xl" aria-hidden="true">{weather.icon}</span>
+                    <div>
+                      <p className="text-4xl font-light tabular-nums">
+                        {Math.round(weather.temperature)}°
+                      </p>
+                      <p className="mt-1 text-sm text-white/75">{weather.description}</p>
+                    </div>
+                  </div>
+                  <div className="mt-5 flex flex-wrap items-center gap-x-5 gap-y-1 text-xs text-white/55">
+                    <span>📍 {weather.city}</span>
+                    <span>Gefühlt {Math.round(weather.apparentTemperature)}°</span>
+                  </div>
+                </>
+              ) : (
+                <p className="mt-4 text-sm text-white/65">
+                  {weatherError || 'Hinterlege im Unternehmensprofil eine vollständige Adresse, um das lokale Wetter zu sehen.'}
+                </p>
+              )}
+              <p className="mt-5 text-[11px] text-white/35">
+                Wetterdaten: Open-Meteo
+              </p>
+            </div>
+
+            <div className="relative min-h-[170px] bg-[#343434]">
+              {weather ? (
+                <img
+                  src={weather.mapUrl}
+                  alt={`Kartenansicht des Standorts ${weather.city}`}
+                  className="absolute inset-0 h-full w-full object-cover"
+                  loading="lazy"
+                />
+              ) : (
+                <div className="flex h-full min-h-[170px] items-center justify-center px-6 text-center text-sm text-white/40">
+                  <span>Die Standortkarte erscheint, sobald die Adresse gefunden wurde.</span>
+                </div>
+              )}
+              <div className="pointer-events-none absolute inset-0 bg-gradient-to-r from-[#242424]/35 via-transparent to-transparent" />
+            </div>
+          </div>
+        </section>
 
         {error && (
           <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl p-4 mb-6">
